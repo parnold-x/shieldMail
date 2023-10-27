@@ -1,10 +1,9 @@
 # ShieldMail
 
-This is a QnD approach to achive the following IMAP/Sieve Behavior
+This is a quick and dirty approach to achieve the following IMAP/Sieve behavior:
 
-When a Email is moved to a IMAP Folder that is watched the program checks the sieve filter if this email address that the mail is from is already in a specific sieve filter that moves all incoming emails from this address to the folder.
-If not it creates automatically the sieve filter.
+When an email is moved to an IMAP folder that is being watched, the program checks the sieve filter to see if the email address that the mail is from is already in a specific sieve filter from ShieldMail that moves all incoming emails from this address to the folder. If it is not, it automatically creates the sieve filter.
 
-The watched folder can be configured in the properties file or if nothin is given all folders under INBOX/ are watched.
+The watched folder can be configured in the properties file. If nothing is given, all folders under INBOX/ are watched.
 
-This works for me fine, if you want to use it feel free and i am open to tweak it a little bit when you open a issue with your usage.
+This approach has worked well for me. If you would like to use it, feel free. I am open to tweaking it a little bit if you open an issue with your usage.
