@@ -39,7 +39,6 @@ public class ShieldMail {
 	private static Properties properties;
 	private Map<String, List<String>> data = new HashMap<>();
 	private String sieveContent;
-	private ManageSieveClient client;
 	private String sieveName;
 
 	// settings
@@ -88,7 +87,6 @@ public class ShieldMail {
 		IMAPStore imapStore = (IMAPStore) emailSession.getStore(properties.getProperty(MAIL_STORE_PROTOCOL, "imaps"));
 		imapStore.connect(properties.getProperty(HOST), Integer.parseInt(properties.getProperty(IMAP_PORT)),
 			properties.getProperty(USER), properties.getProperty(PASSWORD));
-		client = connectSieve(properties);
 		List<String> folders = getFolders(properties);
 		final IMAPFolder inbox = (IMAPFolder) imapStore.getFolder("Inbox");
 		if (folders.isEmpty()) {
@@ -175,7 +173,9 @@ public class ShieldMail {
 		}
 		System.out.println(" Add " + address + " to sieve " + sieveName);
 		list.add(address);
+		ManageSieveClient client = connectSieve(properties);
 		ManageSieveResponse putscript = client.putscript(sieveName, getNewSieveScript());
+		client.logout();
 		if (!putscript.isOk()) {
 			throw new IllegalStateException(putscript.getMessage());
 		}
@@ -188,7 +188,6 @@ public class ShieldMail {
 			if (entry.getValue().isEmpty()) {
 				continue;
 			}
-			sb.append("\n\n");
 			sb.append("## Flag: |UniqueId:");
 			sb.append(id++);
 			sb.append("|Rulename: ");
@@ -202,7 +201,7 @@ public class ShieldMail {
 			sb.append("addflag \"\\\\seen\" ;\n");
 			sb.append("fileinto \"");
 			sb.append(entry.getKey());
-			sb.append("\";\n}");
+			sb.append("\";\n}\n");
 		}
 		return sb.toString();
 	}
@@ -216,7 +215,8 @@ public class ShieldMail {
 	}
 
 	private void handleActiveSieveScript() throws IOException, ParseException {
-		SieveScript script = getActiveScripts();
+		ManageSieveClient client = connectSieve(properties);
+		SieveScript script = getActiveScripts(client);
 		if (script == null) {
 			// could be also handled here by code but no time for that
 			throw new IllegalStateException(
@@ -264,10 +264,14 @@ public class ShieldMail {
 			}
 		}
 		sieveContent = String.join("\n", asList);
+		if (!sieveContent.endsWith("\n")) {
+			sieveContent = sieveContent + "\n";
+		}
 		sieveName = script.getName();
+		client.logout();
 	}
 
-	private SieveScript getActiveScripts() throws IOException, ParseException {
+	private SieveScript getActiveScripts(ManageSieveClient client) throws IOException, ParseException {
 		List<SieveScript> scripts = new ArrayList<SieveScript>();
 
 		// Get the list of this users scripts. The current contents of
