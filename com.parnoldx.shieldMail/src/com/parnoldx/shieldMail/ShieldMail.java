@@ -1,4 +1,4 @@
-package com.parnold_x.shieldMail;
+package com.parnoldx.shieldMail;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,7 +9,6 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,14 +36,18 @@ import com.sun.mail.imap.IMAPFolder;
 import com.sun.mail.imap.IMAPStore;
 
 public class ShieldMail {
+	private static Properties properties;
 	private Map<String, List<String>> data = new HashMap<>();
 	private String sieveContent;
 	private ManageSieveClient client;
 	private String sieveName;
 
+	// settings
+	private static final String timeoutDefault = "50000";
 	// name
 	private static final String SHIELD_MAIL = "ShieldMail";
 	// props
+	private static final String TIMEOUT = "mail.imap.timeout";
 	private static final String FOLDERS = "imap.folders";
 	private static final String SIEVE_PORT = "sieve.port";
 	private static final String PASSWORD = "mail.imap.password";
@@ -52,8 +55,6 @@ public class ShieldMail {
 	private static final String IMAP_PORT = "mail.imap.port";
 	private static final String HOST = "mail.imap.host";
 	private static final String MAIL_STORE_PROTOCOL = "mail.store.protocol";
-
-
 
 	public static void main(String[] args) throws Exception {
 		Path propertiesFile = Path.of("properties.xml");
@@ -71,10 +72,12 @@ public class ShieldMail {
 			System.out.println("Configure your IMAP setting in the properties.xml file");
 			return;
 		}
-		Properties properties = new Properties();
+		properties = new Properties();
 		properties.loadFromXML(Files.newInputStream(propertiesFile));
-		System.out.println("Configuration loaded: " + properties.getProperty(USER) + " for server: "
-			+ properties.getProperty(HOST) + ":" + properties.getProperty(IMAP_PORT));
+		properties.putIfAbsent(TIMEOUT, timeoutDefault);
+		System.out.println("Configuration loaded");
+		System.out.println(properties.getProperty(USER) + " for server " + properties.getProperty(HOST) + ":"
+			+ properties.getProperty(IMAP_PORT));
 		// connect to imap server and start handling
 		new ShieldMail().start(properties);
 	}
@@ -91,6 +94,7 @@ public class ShieldMail {
 		if (folders.isEmpty()) {
 			for (Folder folder : inbox.list()) {
 				watchFolder(folder);
+				folders.add(folder.getFullName());
 			}
 		} else {
 			for (String f : folders) {
@@ -103,9 +107,12 @@ public class ShieldMail {
 			}
 		}
 		handleActiveSieveScript();
-		System.out.println("Connected successfully");
+		System.out.println("Connected successfully. Watching:");
+		for (String f : folders) {
+			System.out.println(" " + f);
+		}
 		for (;;) {
-			Thread.sleep(10000);
+			Thread.sleep(100000);
 		}
 	}
 
@@ -113,27 +120,7 @@ public class ShieldMail {
 		data.put(folder.getFullName(), new ArrayList<>());
 		new Thread(() -> {
 			try {
-				folder.open(IMAPFolder.READ_ONLY);
-				folder.addMessageCountListener(new MessageCountListener() {
-
-					@Override
-					public void messagesRemoved(MessageCountEvent arg0) {
-					}
-
-					@Override
-					public void messagesAdded(MessageCountEvent e) {
-						for (Message m : e.getMessages()) {
-							try {
-								for (Address ad : m.getFrom()) {
-									handleAddress(ad, folder);
-								}
-							} catch (MessagingException | IOException | ParseException e1) {
-								throw new IllegalStateException(e1);
-							}
-						}
-					}
-				});
-				idle(folder);
+				idle((IMAPFolder) folder);
 			} catch (MessagingException | InterruptedException e1) {
 				e1.printStackTrace();
 			}
@@ -141,33 +128,38 @@ public class ShieldMail {
 
 	}
 
-	void idle(Folder folder) throws FolderClosedException, MessagingException, InterruptedException {
-		int freq = 2000;
-		boolean supportsIdle = false;
-		try {
-			if (folder instanceof IMAPFolder) {
-				IMAPFolder f = (IMAPFolder) folder;
-				f.idle();
-				supportsIdle = true;
-			}
-		} catch (FolderClosedException fex) {
-			throw fex;
-		} catch (MessagingException mex) {
-			supportsIdle = false;
-		}
-		for (;;) {
-			if (supportsIdle && folder instanceof IMAPFolder) {
-				IMAPFolder f = (IMAPFolder) folder;
-				f.idle();
-			} else {
-				Thread.sleep(freq); // sleep for freq milliseconds
+	void idle(IMAPFolder folder) throws FolderClosedException, MessagingException, InterruptedException {
+		// We need to create a new thread to keep alive the connection
+		new Thread(new KeepAliveRunnable(folder, Integer.parseInt(properties.getProperty(TIMEOUT)) - 1),
+			"IdleConnectionKeepAlive").start();
 
-				// This is to force the IMAP server to send us
-				// EXISTS notifications.
-				folder.getMessageCount();
+		folder.addMessageCountListener(new MessageCountListener() {
+
+			@Override
+			public void messagesRemoved(MessageCountEvent arg0) {
 			}
+
+			@Override
+			public void messagesAdded(MessageCountEvent e) {
+				for (Message m : e.getMessages()) {
+					try {
+						for (Address ad : m.getFrom()) {
+							handleAddress(ad, folder);
+						}
+					} catch (MessagingException | IOException | ParseException e1) {
+						throw new IllegalStateException(e1);
+					}
+				}
+			}
+		});
+		for (;;) {
+			if (!folder.isOpen()) {
+				folder.open(IMAPFolder.READ_ONLY);
+			}
+			folder.idle();
 		}
 	}
+
 	protected void handleAddress(Address ad, Folder folder) throws IOException, ParseException {
 		String address = ad.toString();
 		if (address.contains("<")) {
@@ -196,7 +188,7 @@ public class ShieldMail {
 			if (entry.getValue().isEmpty()) {
 				continue;
 			}
-			sb.append("\n");
+			sb.append("\n\n");
 			sb.append("## Flag: |UniqueId:");
 			sb.append(id++);
 			sb.append("|Rulename: ");
@@ -210,7 +202,7 @@ public class ShieldMail {
 			sb.append("addflag \"\\\\seen\" ;\n");
 			sb.append("fileinto \"");
 			sb.append(entry.getKey());
-			sb.append("\";\n}\n");
+			sb.append("\";\n}");
 		}
 		return sb.toString();
 	}
@@ -317,11 +309,11 @@ public class ShieldMail {
 	private static List<String> getFolders(Properties properties) {
 		String property = properties.getProperty(FOLDERS, "[]");
 		if (property.trim().length() == 0) {
-			return Collections.emptyList();
+			return new ArrayList<>();
 		}
 		property = property.substring(1, property.length() - 1);
 		if (property.trim().length() == 0) {
-			return Collections.emptyList();
+			return new ArrayList<>();
 		}
 		String[] split = property.split(",");
 		ArrayList<String> folders = new ArrayList<>();
@@ -362,6 +354,28 @@ public class ShieldMail {
 			return null;
 		} catch (KeyManagementException ex) {
 			return null;
+		}
+	}
+
+	private static class KeepAliveRunnable implements Runnable {
+
+		private IMAPFolder folder;
+		private int waitTime;
+
+		public KeepAliveRunnable(IMAPFolder folder, int waitTime) {
+			this.folder = folder;
+			this.waitTime = waitTime;
+		}
+
+		@Override
+		public void run() {
+			while (!Thread.interrupted()) {
+				try {
+					Thread.sleep(waitTime);
+					folder.isOpen();
+				} catch (InterruptedException e) {
+				}
+			}
 		}
 	}
 }
