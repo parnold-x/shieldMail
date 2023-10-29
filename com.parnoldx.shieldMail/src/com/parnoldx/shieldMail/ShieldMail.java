@@ -10,6 +10,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -83,34 +84,48 @@ public class ShieldMail {
 
 	private void start(Properties properties)
 		throws MessagingException, InterruptedException, NumberFormatException, IOException, ParseException {
-		Session emailSession = Session.getDefaultInstance(properties);
-		IMAPStore imapStore = (IMAPStore) emailSession.getStore(properties.getProperty(MAIL_STORE_PROTOCOL, "imaps"));
-		imapStore.connect(properties.getProperty(HOST), Integer.parseInt(properties.getProperty(IMAP_PORT)),
-			properties.getProperty(USER), properties.getProperty(PASSWORD));
-		List<String> folders = getFolders(properties);
-		final IMAPFolder inbox = (IMAPFolder) imapStore.getFolder("Inbox");
-		if (folders.isEmpty()) {
-			for (Folder folder : inbox.list()) {
-				watchFolder(folder);
-				folders.add(folder.getFullName());
-			}
-		} else {
-			for (String f : folders) {
-				try {
-					Folder folder = imapStore.getFolder(f);
-					watchFolder(folder);
-				} catch (MessagingException e) {
-					System.err.println("Could not find folder " + f);
+		while (true) {
+			try {
+				Session emailSession = Session.getDefaultInstance(properties);
+				IMAPStore imapStore = (IMAPStore) emailSession
+					.getStore(properties.getProperty(MAIL_STORE_PROTOCOL, "imaps"));
+				imapStore.connect(properties.getProperty(HOST), Integer.parseInt(properties.getProperty(IMAP_PORT)),
+					properties.getProperty(USER), properties.getProperty(PASSWORD));
+				List<String> folders = getFolders(properties);
+				final IMAPFolder inbox = (IMAPFolder) imapStore.getFolder("Inbox");
+				if (folders.isEmpty()) {
+					for (Folder folder : inbox.list()) {
+						watchFolder(folder);
+						folders.add(folder.getFullName());
+					}
+				} else {
+					Iterator<String> iterator = folders.iterator();
+					while (iterator.hasNext()) {
+						String f = iterator.next();
+						try {
+							Folder folder = imapStore.getFolder(f);
+							watchFolder(folder);
+						} catch (MessagingException e) {
+							System.err.println("Could not find folder " + f);
+							iterator.remove();
+						}
+					}
 				}
+				if (folders.isEmpty()) {
+					System.out.println("No folder to watch");
+					return;
+				}
+				handleActiveSieveScript();
+				System.out.println("Connected successfully. Watching:");
+				for (String f : folders) {
+					System.out.println(" " + f);
+				}
+				for (;;) {
+					Thread.sleep(100000);
+				}
+			} catch (Exception e) {
+				System.out.println("Reconnect");
 			}
-		}
-		handleActiveSieveScript();
-		System.out.println("Connected successfully. Watching:");
-		for (String f : folders) {
-			System.out.println(" " + f);
-		}
-		for (;;) {
-			Thread.sleep(100000);
 		}
 	}
 
@@ -119,8 +134,8 @@ public class ShieldMail {
 		new Thread(() -> {
 			try {
 				idle((IMAPFolder) folder);
-			} catch (MessagingException | InterruptedException e1) {
-				e1.printStackTrace();
+			} catch (MessagingException | InterruptedException e) {
+				throw new IllegalStateException(e);
 			}
 		}).start();
 
