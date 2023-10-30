@@ -85,59 +85,64 @@ public class ShieldMail {
 	private void start(Properties properties)
 		throws MessagingException, InterruptedException, NumberFormatException, IOException, ParseException {
 		while (true) {
-			try {
-				Session emailSession = Session.getDefaultInstance(properties);
-				IMAPStore imapStore = (IMAPStore) emailSession
-					.getStore(properties.getProperty(MAIL_STORE_PROTOCOL, "imaps"));
-				imapStore.connect(properties.getProperty(HOST), Integer.parseInt(properties.getProperty(IMAP_PORT)),
-					properties.getProperty(USER), properties.getProperty(PASSWORD));
-				List<String> folders = getFolders(properties);
-				final IMAPFolder inbox = (IMAPFolder) imapStore.getFolder("Inbox");
-				if (folders.isEmpty()) {
-					for (Folder folder : inbox.list()) {
-						watchFolder(folder);
-						folders.add(folder.getFullName());
+			Session emailSession = Session.getDefaultInstance(properties);
+			IMAPStore imapStore = (IMAPStore) emailSession
+				.getStore(properties.getProperty(MAIL_STORE_PROTOCOL, "imaps"));
+			imapStore.connect(properties.getProperty(HOST), Integer.parseInt(properties.getProperty(IMAP_PORT)),
+				properties.getProperty(USER), properties.getProperty(PASSWORD));
+			List<String> folders = getFolders(properties);
+			final IMAPFolder inbox = (IMAPFolder) imapStore.getFolder("Inbox");
+			List<Thread> threads = new ArrayList<>();
+			if (folders.isEmpty()) {
+				for (Folder folder : inbox.list()) {
+					threads.add(watchFolder(folder));
+					folders.add(folder.getFullName());
+				}
+			} else {
+				Iterator<String> iterator = folders.iterator();
+				while (iterator.hasNext()) {
+					String f = iterator.next();
+					try {
+						Folder folder = imapStore.getFolder(f);
+						threads.add(watchFolder(folder));
+					} catch (MessagingException e) {
+						System.err.println("Could not find folder " + f);
+						iterator.remove();
 					}
-				} else {
-					Iterator<String> iterator = folders.iterator();
-					while (iterator.hasNext()) {
-						String f = iterator.next();
-						try {
-							Folder folder = imapStore.getFolder(f);
-							watchFolder(folder);
-						} catch (MessagingException e) {
-							System.err.println("Could not find folder " + f);
-							iterator.remove();
-						}
-					}
 				}
-				if (folders.isEmpty()) {
-					System.out.println("No folder to watch");
-					return;
+			}
+			if (folders.isEmpty()) {
+				System.out.println("No folder to watch");
+				return;
+			}
+			handleActiveSieveScript();
+			System.out.println("Connected successfully. Watching:");
+			for (String f : folders) {
+				System.out.println(" " + f);
+			}
+			for (;;) {
+				if (threads.stream().allMatch(e -> !e.isAlive())) {
+					System.out.println("Reconnect");
+					break;
 				}
-				handleActiveSieveScript();
-				System.out.println("Connected successfully. Watching:");
-				for (String f : folders) {
-					System.out.println(" " + f);
-				}
-				for (;;) {
-					Thread.sleep(100000);
-				}
-			} catch (Exception e) {
-				System.out.println("Reconnect");
+				Thread.sleep(2000);
 			}
 		}
 	}
 
-	private void watchFolder(Folder folder) throws MessagingException {
+	private Thread watchFolder(Folder folder) throws MessagingException {
 		data.put(folder.getFullName(), new ArrayList<>());
-		new Thread(() -> {
-			try {
-				idle((IMAPFolder) folder);
-			} catch (MessagingException | InterruptedException e) {
-				throw new IllegalStateException(e);
+		Thread thread = new Thread(() -> {
+			for (;;) {
+				try {
+					idle((IMAPFolder) folder);
+				} catch (MessagingException | InterruptedException e) {
+					throw new IllegalStateException(e);
+				}
 			}
-		}).start();
+		});
+		thread.start();
+		return thread;
 
 	}
 
